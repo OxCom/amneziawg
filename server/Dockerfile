@@ -1,24 +1,26 @@
-FROM ubuntu:24.04 AS build
+# Build stage: Go 1.25.x
+FROM golang:1.25.5-bookworm AS build
+# tag 1.25.5-bookworm есть в официальных образах golang :contentReference[oaicite:2]{index=2}
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV GOTOOLCHAIN=local
 ARG TARGETARCH
 ARG AMNEZIAWG_GO_REF=master
 ARG AMNEZIAWG_TOOLS_REF=master
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV GOTOOLCHAIN=local
+# Запрещаем "подправлять" go.mod/go.sum во время сборки:
+ENV GOFLAGS="-mod=readonly"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git build-essential pkg-config \
-    golang-go \
+    ca-certificates git build-essential pkg-config make \
     && rm -rf /var/lib/apt/lists/*
 
-# Build amneziawg-go
+# Build amneziawg-go (в корне один main-пакет)
 RUN git clone https://github.com/amnezia-vpn/amneziawg-go.git /src/amneziawg-go \
  && cd /src/amneziawg-go \
  && git checkout "${AMNEZIAWG_GO_REF}" \
  && CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" \
-    go build -trimpath -ldflags="-s -w" -o /out/amneziawg-go ./
+    go build -trimpath -ldflags="-s -w" -o /out/amneziawg-go .
 
 # Build amneziawg-tools (awg/awg-quick)
 RUN git clone https://github.com/amnezia-vpn/amneziawg-tools.git /src/amneziawg-tools \
@@ -34,6 +36,8 @@ RUN cd /src/manager \
  && CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" \
     go build -trimpath -ldflags="-s -w" -o /out/awg-manager ./cmd/awg-manager
 
+
+# Runtime stage: Ubuntu 24.04 (как вы требовали)
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
