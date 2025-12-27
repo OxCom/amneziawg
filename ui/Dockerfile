@@ -1,14 +1,20 @@
-FROM ubuntu:24.04
+# Build stage
+FROM node:22-alpine AS build
+WORKDIR /app
 
-ENV DEBIAN_FRONTEND=noninteractive
+# If you use package-lock.json, copy it too
+COPY ui/package.json ui/package-lock.json* ./
+RUN npm ci
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates nginx \
-    && rm -rf /var/lib/apt/lists/*
+COPY ui/ ./
+RUN npm run build
 
-COPY ui/src /var/www/html
+# Runtime stage
+FROM nginx:stable-alpine
+# Serve static SPA from /usr/share/nginx/html
+COPY --from=build /app/dist /usr/share/nginx/html
+
+# Minimal nginx config for SPA (no TLS here; TLS is in your separate proxy/app container)
+COPY ui/nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
-EXPOSE 443
-
-CMD ["nginx", "-g", "daemon off;"]
