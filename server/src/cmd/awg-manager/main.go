@@ -35,10 +35,30 @@ type client struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
 	PublicKey string     `json:"publicKey"`
-	PrivKey   string     `json:"-"`
+	PrivKey   string     `json:"privateKey"`
 	Address   string     `json:"address"` // e.g. 10.8.0.2/32
 	CreatedAt time.Time  `json:"createdAt"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+}
+
+type clientPublic struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	PublicKey string     `json:"publicKey"`
+	Address   string     `json:"address"`
+	CreatedAt time.Time  `json:"createdAt"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+}
+
+func toPublic(c client) clientPublic {
+	return clientPublic{
+		ID:        c.ID,
+		Name:      c.Name,
+		PublicKey: c.PublicKey,
+		Address:   c.Address,
+		CreatedAt: c.CreatedAt,
+		ExpiresAt: c.ExpiresAt,
+	}
 }
 
 type dlToken struct {
@@ -230,7 +250,15 @@ func (a *app) handleClients(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(cs)
+
+		out := make([]clientPublic, 0, len(cs))
+
+		for _, c := range cs {
+			out = append(out, toPublic(c))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
 	case http.MethodPost:
 		a.createClient(w, r)
 	default:
@@ -343,7 +371,7 @@ func (a *app) createClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(c)
+	json.NewEncoder(w).Encode(toPublic(c))
 }
 
 func allocateNextAddress(st *serverState) (string, error) {
