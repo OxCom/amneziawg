@@ -1,6 +1,7 @@
-# Build stage: Go 1.25.x
-FROM golang:1.25.5-bookworm AS build
-# tag 1.25.5-bookworm есть в официальных образах golang :contentReference[oaicite:2]{index=2}
+# syntax=docker/dockerfile:1.7
+
+# Build stage (multi-arch)
+FROM --platform=$BUILDPLATFORM golang:1.25.5-bookworm AS build
 
 ARG TARGETARCH
 ARG AMNEZIAWG_GO_REF=master
@@ -8,47 +9,48 @@ ARG AMNEZIAWG_TOOLS_REF=master
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV GOTOOLCHAIN=local
-# Запрещаем "подправлять" go.mod/go.sum во время сборки:
+# enforce reproducible deps (fail build if go.mod/go.sum mismatch)
 ENV GOFLAGS="-mod=readonly"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git build-essential pkg-config make \
-    && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/*
 
-# Build amneziawg-go (в корне один main-пакет)
+# ---------- amneziawg-go ----------
 RUN git clone https://github.com/amnezia-vpn/amneziawg-go.git /src/amneziawg-go \
  && cd /src/amneziawg-go \
  && git checkout "${AMNEZIAWG_GO_REF}" \
+ && go mod download \
+ && go mod verify \
  && CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" \
-    go build -trimpath -ldflags="-s -w" -o /out/amneziawg-go .
+    go build -trimpath -ldflags="-s -w" -o /out/usr/local/bin/amneziawg-go .
 
-# Build amneziawg-tools (awg/awg-quick)
+# ---------- amneziawg-tools (awg/awg-quick) ----------
 RUN git clone https://github.com/amnezia-vpn/amneziawg-tools.git /src/amneziawg-tools \
  && cd /src/amneziawg-tools \
  && git checkout "${AMNEZIAWG_TOOLS_REF}" \
- && cd src \
- && make \
- && make install PREFIX=/out/usr
+ && make -C src \
+ && make -C src install DESTDIR=/out PREFIX=/usr
 
-# Build manager
+# ---------- awg-manager ----------
+WORKDIR /src/manager
 COPY server/src /src/manager
-RUN cd /src/manager \
+RUN go mod download \
+ && go mod verify \
  && CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" \
-    go build -trimpath -ldflags="-s -w" -o /out/awg-manager ./cmd/awg-manager
+    go build -trimpath -ldflags="-s -w" -o /out/usr/local/bin/awg-manager ./cmd/awg-manager
 
-
-# Runtime stage: Ubuntu 24.04 (как вы требовали)
+# Runtime stage: Ubuntu 24.04
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates bash iproute2 iptables \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates bash iproute2 iptables procps \
+  && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /out/amneziawg-go /usr/local/bin/amneziawg-go
-COPY --from=build /out/usr/ /usr/
-COPY --from=build /out/awg-manager /usr/local/bin/awg-manager
+# Copy all built artifacts (binaries + awg tools + etc files)
+COPY --from=build /out/ /
 
 COPY server/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

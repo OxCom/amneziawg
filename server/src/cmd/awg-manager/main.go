@@ -25,18 +25,17 @@ type serverState struct {
 	ServerPrivateKey string `json:"serverPrivateKey"`
 	ServerPublicKey  string `json:"serverPublicKey"`
 
-	// For address allocation
 	SubnetCIDR string `json:"subnetCidr"` // e.g. 10.8.0.0/24
 	ServerIP   string `json:"serverIp"`   // e.g. 10.8.0.1
-	NextHost   int    `json:"nextHost"`   // next host octet/index inside subnet
+	NextHost   int    `json:"nextHost"`   // allocator cursor
 }
 
 type client struct {
 	ID        string     `json:"id"`
 	Name      string     `json:"name"`
 	PublicKey string     `json:"publicKey"`
-	PrivKey   string     `json:"privateKey"`
-	Address   string     `json:"address"` // e.g. 10.8.0.2/32
+	PrivKey   string     `json:"privateKey"` // stored, but NEVER returned in list/create API
+	Address   string     `json:"address"`    // e.g. 10.8.0.2/32
 	CreatedAt time.Time  `json:"createdAt"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
@@ -74,7 +73,7 @@ type app struct {
 	port    int
 	listen  string
 
-	endpoint   string // WG_ENDPOINT domain:port (optional)
+	endpoint   string // optional WG_ENDPOINT domain:port
 	adminToken string
 
 	mu sync.Mutex
@@ -95,6 +94,15 @@ func main() {
 		log.Fatal("ADMIN_TOKEN is required")
 	}
 
+	subnet := os.Getenv("WG_SUBNET")
+	if subnet == "" {
+		log.Fatal("WG_SUBNET is required (e.g. 10.8.0.0/24)")
+	}
+	serverIP := strings.Split(os.Getenv("WG_ADDRESS"), "/")[0]
+	if serverIP == "" {
+		log.Fatal("WG_ADDRESS is required (e.g. 10.8.0.1/24)")
+	}
+
 	a := &app{
 		dataDir:    dataDir,
 		iface:      iface,
@@ -108,25 +116,29 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Subnet config must be provided by env at install-time (written by setup.sh into .env)
-	subnet := os.Getenv("WG_SUBNET")
-	if subnet == "" {
-		log.Fatal("WG_SUBNET is required (e.g. 10.8.0.0/24)")
-	}
-	serverIP := strings.Split(os.Getenv("WG_ADDRESS"), "/")[0]
-	if serverIP == "" {
-		log.Fatal("WG_ADDRESS is required (e.g. 10.8.0.1/24)")
-	}
-
+	// Ensure server state exists
 	if err := a.ensureServerState(subnet, serverIP); err != nil {
 		log.Fatal(err)
+	}
+
+	// IMPORTANT: apply config immediately on startup so the interface starts listening
+	st, err := a.readServerState()
+	if err != nil {
+		log.Fatal(err)
+	}
+	cs, err := a.loadClients()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := a.applyServerConfig(st, cs); err != nil {
+		log.Fatalf("initial apply failed: %v", err)
 	}
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	withAuth := func(h http.HandlerFunc) http.HandlerFunc {
@@ -144,8 +156,17 @@ func main() {
 	mux.HandleFunc("/api/clients/", withAuth(a.handleClientByID))
 	mux.HandleFunc("/dl/", a.handleDownloadToken) // public, token-gated
 
+	srv := &http.Server{
+		Addr:              listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	log.Printf("listening on %s", listen)
-	log.Fatal(http.ListenAndServe(listen, mux))
+	log.Fatal(srv.ListenAndServe())
 }
 
 func (a *app) serverStatePath() string { return filepath.Join(a.dataDir, "server.json") }
@@ -172,7 +193,6 @@ func (a *app) ensureServerState(subnetCIDR, serverIP string) error {
 	}
 	pub := priv.PublicKey()
 
-	// Start allocating from host .2 (common convention). More generally, NextHost=2.
 	st := serverState{
 		ServerPrivateKey: priv.String(),
 		ServerPublicKey:  pub.String(),
@@ -249,18 +269,16 @@ func (a *app) handleClients(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-
 		out := make([]clientPublic, 0, len(cs))
-
 		for _, c := range cs {
 			out = append(out, toPublic(c))
 		}
-
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(out)
+
 	case http.MethodPost:
 		a.createClient(w, r)
+
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -275,20 +293,23 @@ func (a *app) handleClientByID(w http.ResponseWriter, r *http.Request) {
 	}
 	id := parts[0]
 
-	// /api/clients/{id}/config
+	// /api/clients/{id}/config (auth-required)
 	if len(parts) == 2 && parts[1] == "config" && r.Method == http.MethodGet {
 		a.downloadConfig(w, r, id)
 		return
 	}
-	// /api/clients/{id}/link
+
+	// /api/clients/{id}/link (auth-required) -> returns /dl/<token>
 	if len(parts) == 2 && parts[1] == "link" && r.Method == http.MethodPost {
 		a.createOneTimeLink(w, r, id)
 		return
 	}
+
 	if r.Method == http.MethodDelete {
 		a.deleteClient(w, r, id)
 		return
 	}
+
 	http.Error(w, "not found", http.StatusNotFound)
 }
 
@@ -371,27 +392,20 @@ func (a *app) createClient(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(toPublic(c))
+	_ = json.NewEncoder(w).Encode(toPublic(c))
 }
 
 func allocateNextAddress(st *serverState) (string, error) {
-	ip, ipnet, err := net.ParseCIDR(st.SubnetCIDR)
+	_, ipnet, err := net.ParseCIDR(st.SubnetCIDR)
 	if err != nil {
 		return "", err
 	}
-	_ = ip
-
-	// This allocator supports only IPv4 /24..../16 style simply via host index within last octets.
-	// It increments st.NextHost and returns /32 address.
-	// For your use-case (defaults) this is fine; can be extended later.
 
 	base := ipnet.IP.To4()
 	if base == nil {
 		return "", errors.New("only IPv4 subnet supported")
 	}
 
-	// Compute candidate IP by setting last octet to NextHost for /24.
-	// If subnet is not /24, this is simplistic; you can later extend.
 	maskOnes, _ := ipnet.Mask.Size()
 	if maskOnes != 24 {
 		return "", fmt.Errorf("subnet %s: only /24 supported by allocator currently", st.SubnetCIDR)
@@ -419,7 +433,6 @@ func (a *app) deleteClient(w http.ResponseWriter, r *http.Request, id string) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-
 	cs, err := a.loadClients()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -475,9 +488,19 @@ func (a *app) applyServerConfig(st serverState, cs []client) error {
 		return err
 	}
 
-	cmd := exec.Command("awg", "setconf", a.iface, confPath)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
+	// Retry: interface might not be fully ready at the exact moment manager starts
+	var lastErr error
+	for i := 0; i < 20; i++ {
+		cmd := exec.Command("awg", "setconf", a.iface, confPath)
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	return fmt.Errorf("awg setconf failed after retries: %w", lastErr)
 }
 
 func (a *app) downloadConfig(w http.ResponseWriter, r *http.Request, id string) {
@@ -502,16 +525,16 @@ func (a *app) downloadConfig(w http.ResponseWriter, r *http.Request, id string) 
 
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.conf"`, sanitize(c.Name)))
-	w.Write([]byte(cfg))
+	_, _ = w.Write([]byte(cfg))
 }
 
 func (a *app) createOneTimeLink(w http.ResponseWriter, r *http.Request, id string) {
-	// request: {"ttlSeconds": 3600} optional
 	type req struct {
 		TTLSeconds *int `json:"ttlSeconds"`
 	}
 	var q req
 	_ = json.NewDecoder(r.Body).Decode(&q)
+
 	ttl := 3600
 	if q.TTLSeconds != nil && *q.TTLSeconds > 0 {
 		ttl = *q.TTLSeconds
@@ -520,7 +543,6 @@ func (a *app) createOneTimeLink(w http.ResponseWriter, r *http.Request, id strin
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// validate client exists
 	cs, err := a.loadClients()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -557,9 +579,8 @@ func (a *app) createOneTimeLink(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 
-	// You can place UI behind HTTPS; link will be https://<host>/dl/<token>
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"urlPath":   "/dl/" + token,
 		"expiresAt": t.ExpiresAt.Format(time.RFC3339),
 	})
@@ -570,8 +591,7 @@ func (a *app) handleDownloadToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	token := strings.TrimPrefix(r.URL.Path, "/dl/")
-	token = strings.TrimSpace(token)
+	token := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/dl/"))
 	if token == "" {
 		http.Error(w, "not found", 404)
 		return
@@ -597,16 +617,11 @@ func (a *app) handleDownloadToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", 404)
 		return
 	}
-	if ts[idx].Used {
-		http.Error(w, "gone", http.StatusGone)
-		return
-	}
-	if time.Now().After(ts[idx].ExpiresAt) {
+	if ts[idx].Used || time.Now().After(ts[idx].ExpiresAt) {
 		http.Error(w, "gone", http.StatusGone)
 		return
 	}
 
-	// mark used
 	ts[idx].Used = true
 	if err := a.saveTokens(ts); err != nil {
 		http.Error(w, err.Error(), 500)
@@ -630,7 +645,7 @@ func (a *app) handleDownloadToken(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.conf"`, sanitize(c.Name)))
-	w.Write([]byte(cfg))
+	_, _ = w.Write([]byte(cfg))
 }
 
 func (a *app) findClientAndState(id string) (client, serverState, error) {
@@ -651,12 +666,16 @@ func (a *app) findClientAndState(id string) (client, serverState, error) {
 }
 
 func (a *app) renderClientConfig(c client, st serverState) (string, error) {
+	if strings.TrimSpace(c.PrivKey) == "" {
+		return "", errors.New("client private key is empty (clients.json missing privateKey)")
+	}
+
 	var b strings.Builder
 	b.WriteString("[Interface]\n")
 	b.WriteString("PrivateKey = " + c.PrivKey + "\n")
 	b.WriteString("Address = " + c.Address + "\n")
 
-	// extra lines (DPI/obfuscation/etc) — provided by installer, no defaults.
+	// extra Interface lines (DPI/obfuscation/etc) — provided by installer
 	extra := filepath.Join(a.dataDir, "client-extra-interface.txt")
 	if bb, err := os.ReadFile(extra); err == nil {
 		x := strings.TrimSpace(string(bb))
@@ -664,6 +683,7 @@ func (a *app) renderClientConfig(c client, st serverState) (string, error) {
 			b.WriteString(x + "\n")
 		}
 	}
+
 	b.WriteString("\n[Peer]\n")
 	b.WriteString("PublicKey = " + st.ServerPublicKey + "\n")
 	if a.endpoint != "" {
@@ -678,6 +698,7 @@ func (a *app) renderClientConfig(c client, st serverState) (string, error) {
 		}
 	}
 	b.WriteString("AllowedIPs = " + allowed + "\n")
+
 	return b.String(), nil
 }
 
