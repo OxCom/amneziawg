@@ -1,0 +1,76 @@
+.idea/
+
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.bak
+*.orig
+.idea/
+.vscode/
+*.iml
+
+# Env / secrets
+.env
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+
+# Logs
+*.log
+logs/
+log/
+
+# Node (UI, if ever expanded)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+build/
+.cache/
+
+# Go (server)
+**/bin/
+**/out/
+**/*.exe
+**/*.test
+**/*.prof
+**/*.cover
+**/coverage.*
+**/.envrc
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Docker / Compose local
+docker-compose.override.yml
+**/.docker/
+**/.dockerignore
+
+# Runtime data volumes (if you ever map them into the repo)
+data/
+**/data/
+wg-data/
+awg-data/
+*.sqlite
+*.db
+
+# Terraform / IaC (if added later)
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Certificates (letsencrypt/certbot) if mounted into repo
+letsencrypt/
+certbot/
+**/acme-challenge/

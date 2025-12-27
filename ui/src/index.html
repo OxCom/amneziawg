@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>AmneziaWG Admin</title>
+</head>
+<body>
+<h1>AmneziaWG Admin</h1>
+
+<label>Admin token (Bearer): <input id="token" type="password" style="width:320px"/></label>
+<button id="saveToken">Save</button>
+
+<hr/>
+
+<h2>Create client</h2>
+<label>Name: <input id="name" /></label>
+<label>Expiry (RFC3339, optional): <input id="expiry" placeholder="2026-01-31T12:00:00Z" style="width:260px"/></label>
+<button id="createClient">Create</button>
+
+<hr/>
+
+<h2>Clients</h2>
+<button id="refresh">Refresh</button>
+<ul id="clients"></ul>
+
+<script src="/app.js"></script>
+</body>
+</html>
