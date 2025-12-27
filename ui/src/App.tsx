@@ -25,9 +25,12 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import LogoutIcon from "@mui/icons-material/Logout";
 import PasteIcon from "@mui/icons-material/ContentPaste";
 import AddIcon from "@mui/icons-material/Add";
-import { DataGrid, type GridColDef } from "@mui/x-data-grid";
+import {
+  DataGrid,
+  type GridColDef,
+  type GridRenderCellParams,
+} from "@mui/x-data-grid";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { Client } from "./types";
 import { makeApi, toAbsoluteUrl } from "./api";
 
 const LS_KEY = "ADMIN_TOKEN";
@@ -54,13 +57,31 @@ async function copyText(text: string) {
   document.body.removeChild(ta);
 }
 
+type Row = {
+  id: string;
+  name: string;
+  address: string;
+  createdAt: string;
+  expiresAt: string;
+};
+
 export default function App() {
   const qc = useQueryClient();
 
-  const [adminToken, setAdminToken] = React.useState(getToken());
+  const [adminToken, setAdminTokenState] = React.useState(getToken());
   const [tokenDialogOpen, setTokenDialogOpen] = React.useState(() => !getToken());
 
   const api = React.useMemo(() => makeApi(adminToken.trim()), [adminToken]);
+  const authed = adminToken.trim().length > 0;
+
+  const [snack, setSnack] = React.useState<{
+    open: boolean;
+    msg: string;
+    severity: "success" | "error" | "info";
+  }>({ open: false, msg: "", severity: "info" });
+
+  const show = (severity: "success" | "error" | "info", msg: string) =>
+    setSnack({ open: true, msg, severity });
 
   // Optional: accept ?token=... once, then remove from URL
   React.useEffect(() => {
@@ -68,24 +89,13 @@ export default function App() {
     const t = url.searchParams.get("token");
     if (t && t.trim()) {
       const tt = t.trim();
-      setAdminToken(tt);
+      setAdminTokenState(tt);
       setToken(tt);
       url.searchParams.delete("token");
       window.history.replaceState({}, "", url.toString());
       setTokenDialogOpen(false);
     }
   }, []);
-
-  const authed = adminToken.trim().length > 0;
-
-  const [snack, setSnack] = React.useState<{ open: boolean; msg: string; severity: "success" | "error" | "info" }>({
-    open: false,
-    msg: "",
-    severity: "info",
-  });
-
-  const show = (severity: "success" | "error" | "info", msg: string) =>
-    setSnack({ open: true, msg, severity });
 
   const clientsQ = useQuery({
     queryKey: ["clients"],
@@ -94,7 +104,8 @@ export default function App() {
   });
 
   const createClientM = useMutation({
-    mutationFn: (payload: { name: string; expiresAt?: string }) => api.createClient(payload),
+    mutationFn: (payload: { name: string; expiresAt?: string }) =>
+      api.createClient(payload),
     onSuccess: async () => {
       show("success", "Client created");
       await qc.invalidateQueries({ queryKey: ["clients"] });
@@ -133,7 +144,7 @@ export default function App() {
   const [newName, setNewName] = React.useState("");
   const [newExpiresAt, setNewExpiresAt] = React.useState("");
 
-  const rows = (clientsQ.data ?? []).map((c) => ({
+  const rows: Row[] = (clientsQ.data ?? []).map((c) => ({
     id: c.id,
     name: c.name,
     address: c.address,
@@ -141,7 +152,7 @@ export default function App() {
     expiresAt: c.expiresAt ?? "",
   }));
 
-  const columns: GridColDef[] = [
+  const columns: GridColDef<Row>[] = [
     { field: "name", headerName: "Name", flex: 1.2, minWidth: 160 },
     { field: "address", headerName: "Address", flex: 1, minWidth: 160 },
     {
@@ -149,19 +160,25 @@ export default function App() {
       headerName: "Created",
       flex: 1,
       minWidth: 170,
-      valueFormatter: (v) => (v.value ? dayjs(String(v.value)).format("YYYY-MM-DD HH:mm") : ""),
+      renderCell: (params: GridRenderCellParams<Row, string>) => {
+        const v = params.value;
+        return v ? dayjs(v).format("YYYY-MM-DD HH:mm") : "";
+      },
     },
     {
       field: "expiresAt",
       headerName: "Expires",
       flex: 1,
-      minWidth: 170,
-      valueFormatter: (v) => (v.value ? dayjs(String(v.value)).format("YYYY-MM-DD HH:mm") : "-"),
-      renderCell: (params) => {
-        const s = String(params.value || "");
-        if (!s) return <span>-</span>;
-        const expired = dayjs().isAfter(dayjs(s));
-        return expired ? <Chip label="expired" size="small" color="warning" /> : <span>{dayjs(s).format("YYYY-MM-DD HH:mm")}</span>;
+      minWidth: 190,
+      renderCell: (params: GridRenderCellParams<Row, string>) => {
+        const v = params.value;
+        if (!v) return <span>-</span>;
+        const expired = dayjs().isAfter(dayjs(v));
+        return expired ? (
+          <Chip label="expired" size="small" color="warning" />
+        ) : (
+          <span>{dayjs(v).format("YYYY-MM-DD HH:mm")}</span>
+        );
       },
     },
     {
@@ -170,7 +187,7 @@ export default function App() {
       sortable: false,
       filterable: false,
       width: 210,
-      renderCell: (params) => {
+      renderCell: (params: GridRenderCellParams<Row>) => {
         const id = String(params.row.id);
         const busy = downloadM.isPending || copyLinkM.isPending || deleteClientM.isPending;
 
@@ -219,7 +236,7 @@ export default function App() {
 
   const onLogout = () => {
     clearToken();
-    setAdminToken("");
+    setAdminTokenState("");
     setTokenDialogOpen(true);
     qc.clear();
   };
@@ -247,7 +264,8 @@ export default function App() {
         {!authed ? (
           <Paper sx={{ p: 2 }}>
             <Alert severity="info">
-              Введите ADMIN_TOKEN. Он сохраняется в localStorage, поэтому вводить его каждый раз не нужно.
+              Enter ADMIN_TOKEN. It is stored in localStorage, so you do not need to type it again.
+              You can also open the UI as: <code>?token=YOUR_TOKEN</code> (it will be removed from the URL).
             </Alert>
             <Button sx={{ mt: 2 }} variant="contained" onClick={() => setTokenDialogOpen(true)}>
               Enter token
@@ -316,7 +334,12 @@ export default function App() {
         )}
       </Container>
 
-      <Dialog open={tokenDialogOpen} onClose={() => setTokenDialogOpen(false)} fullWidth maxWidth="sm">
+      <Dialog
+        open={tokenDialogOpen}
+        onClose={() => setTokenDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
         <DialogTitle>Admin token</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
@@ -325,7 +348,7 @@ export default function App() {
               type="password"
               label="ADMIN_TOKEN"
               value={adminToken}
-              onChange={(e) => setAdminToken(e.target.value)}
+              onChange={(e) => setAdminTokenState(e.target.value)}
               fullWidth
             />
             <Stack direction="row" spacing={1}>
@@ -335,7 +358,7 @@ export default function App() {
                 onClick={async () => {
                   try {
                     const t = await navigator.clipboard.readText();
-                    if (t) setAdminToken(t.trim());
+                    if (t) setAdminTokenState(t.trim());
                   } catch {
                     show("error", "Clipboard read not permitted by browser");
                   }
