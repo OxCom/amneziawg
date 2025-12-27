@@ -20,7 +20,7 @@ if [[ -f "${ENV_FILE}" ]]; then
   exit 1
 fi
 
-amz_go_ref="$(ask AMNEZIAWG_GO_REF 'amneziawg-go ref (tag/branch/commit)' 'main')"
+amz_go_ref="$(ask AMNEZIAWG_GO_REF 'amneziawg-go ref (tag/branch/commit)' 'master')"
 amz_tools_ref="$(ask AMNEZIAWG_TOOLS_REF 'amneziawg-tools ref (tag/branch/commit)' 'master')"
 
 wg_port="$(ask WG_PORT 'VPN UDP port' '51820')"
