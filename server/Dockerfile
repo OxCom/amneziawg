@@ -16,7 +16,7 @@ RUN git clone https://github.com/amnezia-vpn/amneziawg-go.git /src/amneziawg-go 
  && cd /src/amneziawg-go \
  && git checkout "${AMNEZIAWG_GO_REF}" \
  && CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" \
-    go build -trimpath -ldflags="-s -w" -o /out/amneziawg-go ./...
+    go build -trimpath -ldflags="-s -w" -o /out/amneziawg-go ./
 
 # Build amneziawg-tools (awg/awg-quick)
 RUN git clone https://github.com/amnezia-vpn/amneziawg-tools.git /src/amneziawg-tools \
