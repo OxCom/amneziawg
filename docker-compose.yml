@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: server/Dockerfile
       args:
-        AMNEZIAWG_GO_REF: ${AMNEZIAWG_GO_REF:-main}
+        AMNEZIAWG_GO_REF: ${AMNEZIAWG_GO_REF:-master}
         AMNEZIAWG_TOOLS_REF: ${AMNEZIAWG_TOOLS_REF:-master}
     cap_add:
       - NET_ADMIN
