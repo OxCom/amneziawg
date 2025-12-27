@@ -15,7 +15,7 @@ services:
       WG_ENDPOINT: ${WG_ENDPOINT}
       ADMIN_TOKEN: ${ADMIN_TOKEN}
     ports:
-      - "${WG_PORT}:51820/udp"
+      - "${WG_PORT}:${WG_PORT}/udp"
     volumes:
       - ./data/server:/data
     restart: unless-stopped
