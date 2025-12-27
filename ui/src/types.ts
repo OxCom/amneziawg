@@ -3,11 +3,11 @@ export type Client = {
   name: string;
   publicKey: string;
   address: string;
-  createdAt: string;   // RFC3339
-  expiresAt?: string;  // RFC3339
+  createdAt: string;
+  expiresAt?: string;
 };
 
 export type LinkResponse = {
-  urlPath: string;     // e.g. /dl/<token>
-  expiresAt: string;   // RFC3339
+  urlPath: string;
+  expiresAt: string;
 };

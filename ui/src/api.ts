@@ -3,26 +3,28 @@ import type { Client, LinkResponse } from "./types";
 
 export function makeApi(adminToken: string) {
   const http = axios.create({
-    baseURL: "/", // same-origin behind your proxy
+    baseURL: "/",
     timeout: 15000,
-    headers: {
-      Authorization: `Bearer ${adminToken}`,
-    },
+    headers: { Authorization: `Bearer ${adminToken}` },
   });
 
   return {
-    async health(): Promise<string> {
-      const r = await axios.get("/api/health");
-      return r.data;
-    },
-
     async listClients(): Promise<Client[]> {
-      const r = await http.get<Client[]>("/api/clients");
-      return r.data;
+      const r = await http.get("/api/clients", {
+        headers: { Accept: "application/json" },
+      });
+      // Защита от ситуации, когда вместо JSON прилетает HTML (не тот прокси)
+      if (!Array.isArray(r.data)) {
+        const t = typeof r.data === "string" ? r.data.slice(0, 200) : JSON.stringify(r.data).slice(0, 200);
+        throw new Error(`Unexpected /api/clients response (expected array). Got: ${t}`);
+      }
+      return r.data as Client[];
     },
 
     async createClient(payload: { name: string; expiresAt?: string }): Promise<Client> {
-      const r = await http.post<Client>("/api/clients", payload);
+      const r = await http.post<Client>("/api/clients", payload, {
+        headers: { "Content-Type": "application/json" },
+      });
       return r.data;
     },
 
@@ -31,13 +33,15 @@ export function makeApi(adminToken: string) {
     },
 
     async createOneTimeLink(id: string, ttlSeconds = 3600): Promise<LinkResponse> {
-      const r = await http.post<LinkResponse>(`/api/clients/${id}/link`, { ttlSeconds });
+      const r = await http.post<LinkResponse>(`/api/clients/${id}/link`, { ttlSeconds }, {
+        headers: { "Content-Type": "application/json" },
+      });
       return r.data;
     },
   };
 }
 
-export function absoluteUrl(urlPath: string): string {
+export function toAbsoluteUrl(urlPath: string): string {
   if (urlPath.startsWith("http://") || urlPath.startsWith("https://")) return urlPath;
   return `${window.location.origin}${urlPath}`;
 }
