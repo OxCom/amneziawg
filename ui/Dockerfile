@@ -6,7 +6,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates nginx \
     && rm -rf /var/lib/apt/lists/*
 
-COPY ui/nginx.conf /etc/nginx/nginx.conf
 COPY ui/src /var/www/html
 
 EXPOSE 80

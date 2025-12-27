@@ -2,11 +2,17 @@
 set -euo pipefail
 
 ENV_FILE=".env"
+NGINX_DIST="nginx.conf.dist"
+NGINX_CONF="nginx.conf"
+DATA_DIR="data"
+
+err() { echo "ERROR: $*" >&2; exit 1; }
+need_cmd() { command -v "$1" >/dev/null 2>&1 || err "Command not found: $1"; }
 
 ask() {
-  local var="$1"; local prompt="$2"; local def="${3:-}"
+  local prompt="$1"; local def="${2:-}"
   local val=""
-  if [[ -n "${def}" ]]; then
+  if [[ -n "$def" ]]; then
     read -r -p "${prompt} [${def}]: " val
     val="${val:-$def}"
   else
@@ -15,48 +21,124 @@ ask() {
   printf '%s' "$val"
 }
 
-if [[ -f "${ENV_FILE}" ]]; then
-  echo "ERROR: ${ENV_FILE} already exists. Remove it first if you want to re-run setup."
-  exit 1
-fi
+is_port() { [[ "${1:-}" =~ ^[0-9]+$ ]] && (( 1 <= 10#${1} && 10#${1} <= 65535 )); }
 
-amz_go_ref="$(ask AMNEZIAWG_GO_REF 'amneziawg-go ref (tag/branch/commit)' 'master')"
-amz_tools_ref="$(ask AMNEZIAWG_TOOLS_REF 'amneziawg-tools ref (tag/branch/commit)' 'master')"
-
-wg_port="$(ask WG_PORT 'VPN UDP port' '51820')"
-wg_subnet="$(ask WG_SUBNET 'VPN subnet CIDR (IPv4 /24 required for allocator right now)' '10.8.0.0/24')"
-wg_server_ip="$(ask WG_SERVER_IP 'Server VPN IP (inside subnet)' '10.8.0.1')"
-
-wg_endpoint_host="$(ask WG_ENDPOINT_HOST 'Public endpoint host (domain or IP) used in client configs' '')"
-if [[ -z "${wg_endpoint_host}" ]]; then
-  wg_endpoint=""
-else
-  wg_endpoint="${wg_endpoint_host}:${wg_port}"
-fi
-
-admin_token="$(ask ADMIN_TOKEN 'Admin token (leave empty to auto-generate)' '')"
-if [[ -z "${admin_token}" ]]; then
+gen_token() {
   if command -v openssl >/dev/null 2>&1; then
-    admin_token="$(openssl rand -base64 32 | tr -d '\n')"
+    openssl rand -base64 32 | tr -d '\n'
   else
-    echo "ERROR: openssl not found and ADMIN_TOKEN not provided."
-    exit 1
+    head -c 32 /dev/urandom | base64 | tr -d '\n'
   fi
+}
+
+need_cmd docker
+docker compose version >/dev/null 2>&1 || err "docker compose (v2 plugin) is required"
+
+[[ -f docker-compose.yml ]] || err "Run from project root (docker-compose.yml not found)"
+[[ -f "${NGINX_DIST}" ]] || err "Missing ${NGINX_DIST} in project root"
+
+echo "=== AmneziaWG setup ==="
+
+image_tag="$(ask "GHCR image tag (dev/latest/X.Y.Z)" "dev")"
+
+domain="$(ask "Public domain for UI (must resolve to this host)" "")"
+[[ -n "$domain" ]] || err "DOMAIN is required"
+
+email="$(ask "Certbot email (for Let's Encrypt)" "")"
+[[ -n "$email" ]] || err "CERTBOT_EMAIL is required"
+
+wg_port="$(ask "VPN UDP port" "51820")"
+is_port "$wg_port" || err "WG_PORT must be 1..65535"
+
+wg_iface="$(ask "Interface name inside container" "wg0")"
+wg_subnet="$(ask "VPN subnet (IPv4 /24 recommended)" "10.8.0.0/24")"
+wg_address="$(ask "Server VPN address" "10.8.0.1/24")"
+
+endpoint_host="$(ask "Public endpoint host for client configs (domain or IP; empty to skip)" "")"
+wg_endpoint=""
+if [[ -n "$endpoint_host" ]]; then
+  wg_endpoint="${endpoint_host}:${wg_port}"
 fi
 
-cat > "${ENV_FILE}" <<EOF
-AMNEZIAWG_GO_REF=${amz_go_ref}
-AMNEZIAWG_TOOLS_REF=${amz_tools_ref}
+admin_token="$(ask "Admin token (leave empty to auto-generate)" "")"
+if [[ -z "$admin_token" ]]; then
+  admin_token="$(gen_token)"
+fi
 
-WG_IFACE=wg0
+# Persistent dirs
+mkdir -p "${DATA_DIR}/server" "${DATA_DIR}/letsencrypt" "${DATA_DIR}/certbot/www"
+
+# Render nginx.conf from nginx.conf.dist
+# We never modify nginx.conf.dist. We create/update nginx.conf in root.
+if [[ -f "${NGINX_CONF}" ]]; then
+  overwrite="$(ask "${NGINX_CONF} already exists. Overwrite it with domain '${domain}'? (yes/no)" "no")"
+  if [[ "$overwrite" != "yes" ]]; then
+    echo "Keeping existing ${NGINX_CONF}"
+  else
+    tmp="$(mktemp)"
+    sed "s/__DOMAIN__/${domain}/g" "${NGINX_DIST}" > "${tmp}"
+    install -m 0644 "${tmp}" "${NGINX_CONF}"
+    rm -f "${tmp}"
+    echo "Rendered ${NGINX_CONF} from ${NGINX_DIST}"
+  fi
+else
+  tmp="$(mktemp)"
+  sed "s/__DOMAIN__/${domain}/g" "${NGINX_DIST}" > "${tmp}"
+  install -m 0644 "${tmp}" "${NGINX_CONF}"
+  rm -f "${tmp}"
+  echo "Rendered ${NGINX_CONF} from ${NGINX_DIST}"
+fi
+
+# Write .env
+if [[ -f "${ENV_FILE}" ]]; then
+  overwrite_env="$(ask "${ENV_FILE} already exists. Overwrite it? (yes/no)" "no")"
+  if [[ "$overwrite_env" != "yes" ]]; then
+    echo "Keeping existing ${ENV_FILE}"
+  else
+    cat > "${ENV_FILE}" <<EOF
+IMAGE_TAG=${image_tag}
+DOMAIN=${domain}
+CERTBOT_EMAIL=${email}
+
+WG_IFACE=${wg_iface}
 WG_PORT=${wg_port}
+WG_ADDRESS=${wg_address}
 WG_SUBNET=${wg_subnet}
-WG_ADDRESS=${wg_server_ip}/24
 WG_ENDPOINT=${wg_endpoint}
 
 ADMIN_TOKEN=${admin_token}
 EOF
+    echo "Written ${ENV_FILE}"
+  fi
+else
+  cat > "${ENV_FILE}" <<EOF
+IMAGE_TAG=${image_tag}
+DOMAIN=${domain}
+CERTBOT_EMAIL=${email}
 
-echo "Written ${ENV_FILE}"
+WG_IFACE=${wg_iface}
+WG_PORT=${wg_port}
+WG_ADDRESS=${wg_address}
+WG_SUBNET=${wg_subnet}
+WG_ENDPOINT=${wg_endpoint}
+
+ADMIN_TOKEN=${admin_token}
+EOF
+  echo "Written ${ENV_FILE}"
+fi
+
+echo
 echo "Next:"
-echo "  docker compose up -d --build"
+echo "  1) docker compose pull"
+echo "  2) docker compose up -d"
+echo
+echo "First-time certificate issuance (HTTP-01 uses port 80):"
+echo "  docker compose run --rm certbot certonly \\"
+echo "    --webroot -w /var/www/certbot \\"
+echo "    -d ${domain} \\"
+echo "    --email ${email} --agree-tos --no-eff-email"
+echo
+echo "Then reload UI to pick up certs:"
+echo "  docker compose restart ui"
+echo
+echo "Admin token (store securely): ${admin_token}"
