@@ -471,12 +471,6 @@ func (a *app) applyServerConfig(st serverState, cs []client) error {
 	b.WriteString("PrivateKey = " + st.ServerPrivateKey + "\n")
 	b.WriteString(fmt.Sprintf("ListenPort = %d\n", a.port))
 
-	// Add server address using the subnet mask from SubnetCIDR (e.g. 10.8.0.1/24)
-	if _, ipnet, err := net.ParseCIDR(st.SubnetCIDR); err == nil {
-		ones, _ := ipnet.Mask.Size()
-		b.WriteString("Address = " + st.ServerIP + fmt.Sprintf("/%d\n", ones))
-	}
-
 	// extra Interface lines for server — provided by installer
 	extra := filepath.Join(a.dataDir, "server-extra-interface.txt")
 	if bb, err := os.ReadFile(extra); err == nil {
