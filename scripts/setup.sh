@@ -54,11 +54,9 @@ wg_iface="$(ask "Interface name inside container" "wg0")"
 wg_subnet="$(ask "VPN subnet (IPv4 /24 recommended)" "10.8.0.0/24")"
 wg_address="$(ask "Server VPN address" "10.8.0.1/24")"
 
-endpoint_host="$(ask "Public endpoint host for client configs (domain or IP; empty to skip)" "")"
-wg_endpoint=""
-if [[ -n "$endpoint_host" ]]; then
-  wg_endpoint="${endpoint_host}:${wg_port}"
-fi
+# WG_ENDPOINT is always derived from DOMAIN and WG_PORT
+# (This is what clients should use to reach the VPN server.)
+wg_endpoint="${domain}:${wg_port}"
 
 admin_token="$(ask "Admin token (leave empty to auto-generate)" "")"
 if [[ -z "$admin_token" ]]; then

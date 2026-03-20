@@ -425,6 +425,7 @@ func allocateNextAddress(st *serverState) (string, error) {
 }
 
 func (a *app) deleteClient(w http.ResponseWriter, r *http.Request, id string) {
+	_ = r
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -469,6 +470,21 @@ func (a *app) applyServerConfig(st serverState, cs []client) error {
 	b.WriteString("[Interface]\n")
 	b.WriteString("PrivateKey = " + st.ServerPrivateKey + "\n")
 	b.WriteString(fmt.Sprintf("ListenPort = %d\n", a.port))
+
+	// Add server address using the subnet mask from SubnetCIDR (e.g. 10.8.0.1/24)
+	if _, ipnet, err := net.ParseCIDR(st.SubnetCIDR); err == nil {
+		ones, _ := ipnet.Mask.Size()
+		b.WriteString("Address = " + st.ServerIP + fmt.Sprintf("/%d\n", ones))
+	}
+
+	// extra Interface lines for server — provided by installer
+	extra := filepath.Join(a.dataDir, "server-extra-interface.txt")
+	if bb, err := os.ReadFile(extra); err == nil {
+		x := strings.TrimSpace(string(bb))
+		if x != "" {
+			b.WriteString(x + "\n")
+		}
+	}
 	b.WriteString("\n")
 
 	now := time.Now()
@@ -504,6 +520,7 @@ func (a *app) applyServerConfig(st serverState, cs []client) error {
 }
 
 func (a *app) downloadConfig(w http.ResponseWriter, r *http.Request, id string) {
+	_ = r
 	c, st, err := a.findClientAndState(id)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
