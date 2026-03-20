@@ -97,7 +97,7 @@ ADMIN_TOKEN=your_secure_token
 
 ---
 
-🔐 Security Notes
+# 🔐 Security Notes
 
 - `ADMIN_TOKEN` is required for all API access
 - One-time links (/dl/{token}):
@@ -109,7 +109,7 @@ Private keys are stored server-side and not exposed via API
 
 ---
 
-⚠️ Notes & Limitations
+# ⚠️ Notes & Limitations
 
 - No role-based access control (single admin token)
 - No built-in HA / clustering
