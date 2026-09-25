@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
 # Build stage (multi-arch)
-FROM --platform=$BUILDPLATFORM golang:1.25.5-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.1-bookworm AS build
 
 ARG TARGETARCH
-ARG AMNEZIAWG_GO_REF=master
-ARG AMNEZIAWG_TOOLS_REF=master
+ARG AMNEZIAWG_GO_REF=v3.1.20260828
+ARG AMNEZIAWG_TOOLS_REF=v3.1.20260812
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV GOTOOLCHAIN=local

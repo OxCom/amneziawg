@@ -12,6 +12,7 @@ AmneziaWG Manager provides:
 
 - Centralized VPN client management
 - Automatic configuration generation
+- Client configuration QR codes for scanning in AmneziaWG apps
 - One-time download links for client configs
 - Web UI for administration
 - Fully containerized deployment
@@ -82,7 +83,7 @@ Optional overrides:
 # 🔧 Configuration
 Example of `.env`
 ```env
-IMAGE_TAG=1.0.0
+IMAGE_TAG=dev
 DOMAIN=vpn.example.com
 CERTBOT_EMAIL=admin@example.com
 
@@ -103,9 +104,7 @@ ADMIN_TOKEN=your_secure_token
 - One-time links (/dl/{token}):
   - expire after use
   - are publicly accessible until consumed
-- Private keys are stored server-side and not exposed via API
-
-Private keys are stored server-side and not exposed via API
+- The authenticated config endpoint and QR dialog include each client's private key
 
 ---
 

@@ -32,6 +32,14 @@ export function makeApi(adminToken: string) {
       await http.delete(`/api/clients/${id}`);
     },
 
+    async getClientConfig(id: string, signal?: AbortSignal): Promise<string> {
+      const r = await http.get<string>(`/api/clients/${id}/config`, {
+        responseType: "text",
+        signal,
+      });
+      return r.data;
+    },
+
     async createOneTimeLink(id: string, ttlSeconds = 3600): Promise<LinkResponse> {
       const r = await http.post<LinkResponse>(`/api/clients/${id}/link`, { ttlSeconds }, {
         headers: { "Content-Type": "application/json" },

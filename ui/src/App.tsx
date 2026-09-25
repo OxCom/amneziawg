@@ -18,6 +18,8 @@ import {
   IconButton,
   Tooltip,
   Chip,
+  Box,
+  CircularProgress,
 } from "@mui/material";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import DownloadIcon from "@mui/icons-material/Download";
@@ -25,6 +27,8 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import LogoutIcon from "@mui/icons-material/Logout";
 import PasteIcon from "@mui/icons-material/ContentPaste";
 import AddIcon from "@mui/icons-material/Add";
+import QrCode2Icon from "@mui/icons-material/QrCode2";
+import { QRCodeSVG } from "qrcode.react";
 import {
   DataGrid,
   type GridColDef,
@@ -36,6 +40,10 @@ import { makeApi, toAbsoluteUrl } from "./api";
 const LS_KEY = "ADMIN_TOKEN";
 
 function getToken(): string {
+  const token = new URL(window.location.href).searchParams.get("token")?.trim();
+  if (token) {
+    return token;
+  }
   return localStorage.getItem(LS_KEY) ?? "";
 }
 function setToken(v: string) {
@@ -57,6 +65,10 @@ async function copyText(text: string) {
   document.body.removeChild(ta);
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 type Row = {
   id: string;
   name: string;
@@ -68,8 +80,8 @@ type Row = {
 export default function App() {
   const qc = useQueryClient();
 
-  const [adminToken, setAdminTokenState] = React.useState(getToken());
-  const [tokenDialogOpen, setTokenDialogOpen] = React.useState(() => !getToken());
+  const [adminToken, setAdminTokenState] = React.useState(getToken);
+  const [tokenDialogOpen, setTokenDialogOpen] = React.useState(() => !adminToken);
 
   const api = React.useMemo(() => makeApi(adminToken.trim()), [adminToken]);
   const authed = adminToken.trim().length > 0;
@@ -89,11 +101,9 @@ export default function App() {
     const t = url.searchParams.get("token");
     if (t && t.trim()) {
       const tt = t.trim();
-      setAdminTokenState(tt);
       setToken(tt);
       url.searchParams.delete("token");
       window.history.replaceState({}, "", url.toString());
-      setTokenDialogOpen(false);
     }
   }, []);
 
@@ -110,7 +120,7 @@ export default function App() {
       show("success", "Client created");
       await qc.invalidateQueries({ queryKey: ["clients"] });
     },
-    onError: (e: any) => show("error", e?.message ?? "Create failed"),
+    onError: (e) => show("error", errorMessage(e, "Create failed")),
   });
 
   const deleteClientM = useMutation({
@@ -119,7 +129,7 @@ export default function App() {
       show("success", "Client deleted");
       await qc.invalidateQueries({ queryKey: ["clients"] });
     },
-    onError: (e: any) => show("error", e?.message ?? "Delete failed"),
+    onError: (e) => show("error", errorMessage(e, "Delete failed")),
   });
 
   const downloadM = useMutation({
@@ -127,7 +137,7 @@ export default function App() {
       const link = await api.createOneTimeLink(id, 3600);
       window.location.href = toAbsoluteUrl(link.urlPath); // публичный /dl/<token>
     },
-    onError: (e: any) => show("error", e?.message ?? "Download failed"),
+    onError: (e) => show("error", errorMessage(e, "Download failed")),
   });
 
   const copyLinkM = useMutation({
@@ -138,11 +148,58 @@ export default function App() {
       return link.expiresAt;
     },
     onSuccess: (expiresAt) => show("success", `Link copied (expires ${expiresAt})`),
-    onError: (e: any) => show("error", e?.message ?? "Copy link failed"),
+    onError: (e) => show("error", errorMessage(e, "Copy link failed")),
   });
 
   const [newName, setNewName] = React.useState("");
   const [newExpiresAt, setNewExpiresAt] = React.useState("");
+  const [qrClient, setQrClient] = React.useState<{ id: string; name: string } | null>(null);
+  const [qrConfig, setQrConfig] = React.useState("");
+  const [qrError, setQrError] = React.useState("");
+  const [qrLoading, setQrLoading] = React.useState(false);
+  const qrAbort = React.useRef<AbortController | null>(null);
+
+  const closeQr = () => {
+    qrAbort.current?.abort();
+    qrAbort.current = null;
+    setQrClient(null);
+    setQrConfig("");
+    setQrError("");
+    setQrLoading(false);
+  };
+
+  const openQr = async (client: { id: string; name: string }) => {
+    qrAbort.current?.abort();
+    const controller = new AbortController();
+    qrAbort.current = controller;
+    setQrClient(client);
+    setQrConfig("");
+    setQrError("");
+    setQrLoading(true);
+
+    try {
+      const config = await api.getClientConfig(client.id, controller.signal);
+      if (controller.signal.aborted) {
+        return;
+      }
+      if (new TextEncoder().encode(config).length > 2500) {
+        setQrError("Configuration is too large for a QR code. Download it instead.");
+        return;
+      }
+      setQrConfig(config);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setQrError(errorMessage(error, "Could not load configuration"));
+      }
+    } finally {
+      if (qrAbort.current === controller) {
+        qrAbort.current = null;
+      }
+      if (!controller.signal.aborted) {
+        setQrLoading(false);
+      }
+    }
+  };
 
   const rows: Row[] = (clientsQ.data ?? []).map((c) => ({
     id: c.id,
@@ -186,7 +243,7 @@ export default function App() {
       headerName: "Actions",
       sortable: false,
       filterable: false,
-      width: 210,
+      width: 260,
       renderCell: (params: GridRenderCellParams<Row>) => {
         const id = String(params.row.id);
         const busy = downloadM.isPending || copyLinkM.isPending || deleteClientM.isPending;
@@ -205,6 +262,19 @@ export default function App() {
               <span>
                 <IconButton size="small" onClick={() => downloadM.mutate(id)} disabled={busy}>
                   <DownloadIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+
+            <Tooltip title="Show config QR code">
+              <span>
+                <IconButton
+                  size="small"
+                  aria-label={`Show QR code for ${params.row.name}`}
+                  onClick={() => void openQr({ id, name: params.row.name })}
+                  disabled={busy}
+                >
+                  <QrCode2Icon fontSize="small" />
                 </IconButton>
               </span>
             </Tooltip>
@@ -235,6 +305,7 @@ export default function App() {
   };
 
   const onLogout = () => {
+    closeQr();
     clearToken();
     setAdminTokenState("");
     setTokenDialogOpen(true);
@@ -315,7 +386,7 @@ export default function App() {
 
               {clientsQ.isError ? (
                 <Alert severity="error" sx={{ mb: 2 }}>
-                  {(clientsQ.error as any)?.message ?? "Failed to load clients"}
+                  {errorMessage(clientsQ.error, "Failed to load clients")}
                 </Alert>
               ) : null}
 
@@ -374,6 +445,41 @@ export default function App() {
           <Button variant="contained" onClick={onSaveToken}>
             Save
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={qrClient !== null} onClose={closeQr} aria-labelledby="config-qr-title" fullWidth maxWidth="sm">
+        <DialogTitle id="config-qr-title">Configuration QR code: {qrClient?.name}</DialogTitle>
+        <DialogContent>
+          {qrLoading && (
+            <Box sx={{ display: "flex", justifyContent: "center", py: 4 }}>
+              <CircularProgress aria-label="Loading configuration" />
+            </Box>
+          )}
+          {qrError && <Alert severity="error">{qrError}</Alert>}
+          {qrConfig && (
+            <Stack spacing={2} sx={{ py: 2, alignItems: "center" }}>
+              <Box
+                role="img"
+                aria-label={`Configuration QR code for ${qrClient?.name}`}
+                sx={{ width: "100%", maxWidth: 360 }}
+              >
+                <QRCodeSVG
+                  value={qrConfig}
+                  level="L"
+                  size={360}
+                  marginSize={4}
+                  style={{ width: "100%", height: "auto" }}
+                />
+              </Box>
+              <Alert severity="info" sx={{ width: "100%" }}>
+                Scan with an AmneziaWG client. This QR code contains the client private key.
+              </Alert>
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeQr}>Close</Button>
         </DialogActions>
       </Dialog>
 
